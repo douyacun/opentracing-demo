@@ -3,9 +3,9 @@
 1. 了解opentracing
 2. 开源库jaeger/zipkin都实现了opentracing
 3. zipkin架构和组件
-   1. 如何自定义一个span？
+   1. xorm sql 埋点
+   2. 自定义span
 4. go语言接入jaeger
-
 
 # zipkin vs jaeger
 
@@ -134,6 +134,67 @@ func main() {
 > otgrpc 实现源码很简单，看一下
 >
 > 本次实践源码:  [https://github.com/douyacun/opentracing-demo](https://github.com/douyacun/opentracing-demo)
+
+#### xorm
+
+```go
+
+var DB *xorm.Engine
+
+func Init() error {
+	var err error
+	// XORM创建引擎
+	DB, err = xorm.NewEngine("mysql", "root:root@(127.0.0.1:3306)/toilet?charset=utf8mb4")
+	if err != nil {
+		return err
+	}
+	// 创建自定义的日志实例
+	log := logrus.New()
+	log.Out = os.Stdout
+	// 将日志实例设置到XORM的引擎中
+	DB.SetLogger(&TracerLogger{
+		logger:  log,
+		level:   xormLog.LOG_DEBUG,
+		showSQL: true,
+	})
+	return nil
+}
+
+type TracerLogger struct {
+	logger  *logrus.Logger
+	level   xormLog.LogLevel
+	showSQL bool
+	span    opentracing.Span
+}
+
+// 主要是实现 SQLLogger 接口
+// type SQLLogger interface {
+// 	BeforeSQL(context LogContext) // only invoked when IsShowSQL is true
+// 	AfterSQL(context LogContext)  // only invoked when IsShowSQL is true
+// }
+func (l *TracerLogger) BeforeSQL(ctx xormLog.LogContext) {
+	l.span, _ = opentracing.StartSpanFromContext(ctx.Ctx, "xorm")
+}
+
+func (l *TracerLogger) AfterSQL(ctx xormLog.LogContext) {
+	defer l.span.Finish()
+	var sessionPart string
+	l.span.LogFields(opentracingLog.String("db.statement", ctx.SQL))
+	l.span.LogFields(opentracingLog.Object("db.args", ctx.Args))
+	l.span.LogFields(opentracingLog.String("db.type", "sql"))
+	l.span.LogFields(opentracingLog.Object("db.execute_time", ctx.ExecuteTime))
+	if ctx.ExecuteTime > 0 {
+		l.logger.Infof("[SQL]%s %s %v - %v", sessionPart, ctx.SQL, ctx.Args, ctx.ExecuteTime)
+	} else {
+		l.logger.Infof("[SQL]%s %s %v", sessionPart, ctx.SQL, ctx.Args)
+	}
+}
+```
+
+> 需要xorm: 1.0 以上的版本
+>
+> - `"xorm.io/xorm/log"`
+> - `"xorm.io/xorm"`
 
 ## jaeger
 
