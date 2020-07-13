@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
-	greet "demo/zipkin/proto"
+	"demo/db_xorm"
+	"demo/models"
+	toiletProto "demo/proto"
+	"errors"
+	"fmt"
 	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
@@ -16,17 +20,28 @@ import (
 
 type handler struct{}
 
-func (h *handler) Say(ctx context.Context, req *greet.SayRequest) (*greet.SayResponse, error) {
-	res := &greet.SayResponse{
-		Msg:  "success",
-		Code: 0,
-	}
-	log.Printf("%s say %s", req.Name, req.Msg)
+func (h *handler) Find(ctx context.Context, req *toiletProto.FindRequest) (*toiletProto.FindResponse, error) {
+	res := &toiletProto.FindResponse{}
+	slot := &models.Slot{}
 
+	session := db_xorm.DB.NewSession().Context(ctx)
+
+
+	if ok, err := session.Table("slot").Where("id = ?", req.Id).Get(slot); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.New(fmt.Sprintf("user not found (id: %d)", req.Id))
+	}
+	res.Id = slot.Id
+	res.Name = slot.Name
+	res.Status = slot.Status
 	return res, nil
 }
 
 func main() {
+	if err := db_xorm.Init(); err != nil {
+		log.Fatalf("xorm init error: %v", err)
+	}
 	// reporter
 	reporter := zipkinhttp.NewReporter("http://localhost:9411/api/v2/spans")
 	defer reporter.Close()
@@ -66,7 +81,7 @@ func main() {
 		))),
 	)
 
-	greet.RegisterServiceServer(grpcServer, &handler{})
+	toiletProto.RegisterToiletServer(grpcServer, &handler{})
 	listener, err := net.Listen("tcp", ":1234")
 	if err != nil {
 		log.Fatalf("net listen error: %v", err.Error())
